@@ -1,0 +1,6 @@
+pandas   # Versión mínima razonable, pero es mejor usar una más reciente si es posible
+streamlit  # Streamlit ha tenido cambios importantes; es mejor usar 1.x
+openpyxl   # Necesario para escribir archivos Excel (xlsx) con pandas
+numpy  # Compatible con pandas; versiones más nuevas son preferibles
+sqlite3  # Generalmente viene con Python, pero es bueno especificarlo
+unicodedata2; sys_platform == 'win32'  # Solo para windows
