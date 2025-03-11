@@ -5,6 +5,7 @@ import sqlite3
 import numpy as np
 from io import BytesIO
 import unicodedata
+import tempfile
 
 # Configuración de la página
 st.set_page_config(
@@ -69,25 +70,39 @@ def get_unique_records(df, column_name):
     return df.drop_duplicates(subset=[column_name])
 
 @st.cache_data
-def load_data(file_path, sheet_name=None):
-    """Carga datos desde archivo"""
+def load_data(file_data, sheet_name=None):
+    """Carga datos desde un archivo subido"""
     try:
-        if file_path.endswith('.csv'):
-            return pd.read_csv(file_path)
+        if file_data.name.endswith('.csv'):
+            # Asegurarse de reiniciar el puntero
+            file_data.seek(0)
+            return pd.read_csv(file_data)
         else:
-            return pd.read_excel(file_path, sheet_name=sheet_name)
+            file_data.seek(0)
+            return pd.read_excel(file_data, sheet_name=sheet_name)
     except Exception as e:
         st.error(f"Error al cargar el archivo: {e}")
         return None
 
 @st.cache_data
-def load_db_data(db_file_path, query="SELECT * FROM ConsolidatedData;"):
-    """Carga datos desde una base de datos SQLite"""
+def load_db_data(db_file, query="SELECT * FROM ConsolidatedData;"):
+    """Carga datos desde una base de datos SQLite subida"""
     try:
-        conn = sqlite3.connect(db_file_path)
-        db_data = pd.read_sql(query, conn)
-        conn.close()
-        return db_data
+        # Si se subió el archivo, se guarda en un temporal
+        if hasattr(db_file, 'read'):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as tmp:
+                tmp.write(db_file.read())
+                tmp_path = tmp.name
+            conn = sqlite3.connect(tmp_path)
+            db_data = pd.read_sql(query, conn)
+            conn.close()
+            os.remove(tmp_path)
+            return db_data
+        else:
+            conn = sqlite3.connect(db_file)
+            db_data = pd.read_sql(query, conn)
+            conn.close()
+            return db_data
     except Exception as e:
         st.error(f"Error al cargar la base de datos: {e}")
         return None
@@ -97,11 +112,6 @@ def apply_filters(df, table_name):
     Aplica filtros interactivos a un DataFrame.
     """
     st.write(f"### Filtros para {table_name}")
-
-    # **Depuración: Mostrar las primeras filas del dataframe recibido**
-    # st.write(f"#### Datos Recibidos para {table_name}")
-    # st.write(df.head())
-
     filter_columns = [col for col in df.columns if len(df[col].dropna().unique()) > 0 and len(df[col].dropna().unique()) <= 100]
     filter_keys = [f"filter_{table_name}_{col}" for col in filter_columns]
 
@@ -127,11 +137,6 @@ def apply_filters(df, table_name):
             filtered_df = filtered_df[filtered_df[column].astype(str).isin(selected_values)]
 
     st.write(f"**Total de registros después de filtrar:** {len(filtered_df)}")
-    
-    # **Depuración: Mostrar las primeras filas del dataframe filtrado**
-    # st.write(f"#### Datos Filtrados para {table_name}")
-    # st.write(filtered_df.head())
-
     return filtered_df
 
 def calculate_length_stats(series):
@@ -149,16 +154,13 @@ def display_comparison_results(df1, df2, df1_name, df2_name, key_column, additio
     """Muestra los resultados de la comparación"""
     st.header("Resultados de la Comparación")
     
-    # Obtener registros únicos y coincidencias
     unique_df1 = get_unique_records(df1, key_column)
     unique_df2 = get_unique_records(df2, key_column)
     
-    # Encontrar coincidencias y no coincidencias
     merged_inner = pd.merge(unique_df1, unique_df2, on=key_column, how='inner', suffixes=('_1', '_2'))
     non_matches_df1 = unique_df1[~unique_df1[key_column].isin(merged_inner[key_column])]
     non_matches_df2 = unique_df2[~unique_df2[key_column].isin(merged_inner[key_column])]
     
-    # Mostrar estadísticas generales
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Coincidencias", len(merged_inner))
@@ -167,7 +169,6 @@ def display_comparison_results(df1, df2, df1_name, df2_name, key_column, additio
     with col3:
         st.metric(f"No encontrados en {df1_name}", len(non_matches_df2))
     
-    # Función para filtrar DataFrame basado en búsqueda
     def filter_dataframe(df, search_term, columns_to_search):
         if search_term:
             mask = pd.Series(False, index=df.index)
@@ -176,7 +177,6 @@ def display_comparison_results(df1, df2, df1_name, df2_name, key_column, additio
             return df[mask]
         return df
 
-    # Mostrar no coincidencias
     st.subheader("❌ No Coincidencias Únicas")
     tabs_non_matches = st.tabs([f"No encontrados en {df2_name}", f"No encontrados en {df1_name}"])
     
@@ -196,7 +196,6 @@ def display_comparison_results(df1, df2, df1_name, df2_name, key_column, additio
         else:
             st.info("No se encontraron registros que coincidan con la búsqueda.")
 
-    # Mostrar coincidencias
     st.subheader("✅ Coincidencias Únicas")
     search_term_matches = st.text_input("🔍 Buscar en registros coincidentes", key="search_matches")
     filtered_matches = filter_dataframe(merged_inner, search_term_matches, 
@@ -217,13 +216,12 @@ def main():
     st.markdown("""
     Esta aplicación permite comparar dos conjuntos de datos provenientes de archivos Excel/CSV o bases de datos SQLite.
     Selecciona las fuentes de datos, especifica las columnas a comparar y obtén coincidencias y no coincidencias de manera sencilla.
-    Se comparara la Fuente 2 vs Fuente 1
+    Se comparará la Fuente 2 vs Fuente 1.
     """)
 
-    # Uso de pestañas para separar las fuentes de datos
     tabs = st.tabs(["🔹 Fuente de Datos 1", "🔹 Fuente de Datos 2"])
-
     data_sources = {}
+
     for idx, tab in enumerate(tabs, start=1):
         with tab:
             st.header(f"Fuente de Datos {idx}")
@@ -239,15 +237,18 @@ def main():
             trim_options = {"enable": False, "trim_start": 0, "trim_end": 0}
 
             if data_source == "Archivo Excel/CSV":
-                file_path = st.text_input(
-                    f"Ruta del archivo Excel/CSV para el dataset {idx}:",
-                    key=f'file{idx}_input'
+                uploaded_file = st.file_uploader(
+                    f"Sube el archivo Excel/CSV para el dataset {idx}:",
+                    type=["csv", "xlsx", "xls"],
+                    key=f'file{idx}_uploader'
                 )
-                if file_path and os.path.isfile(file_path):
+                if uploaded_file is not None:
                     sheet_name = None
-                    if file_path.endswith(('.xlsx', '.xls')):
+                    if uploaded_file.name.endswith(('.xlsx', '.xls')):
                         try:
-                            sheets = pd.ExcelFile(file_path).sheet_names
+                            # Para obtener las hojas, leemos el archivo subido
+                            uploaded_file.seek(0)
+                            sheets = pd.ExcelFile(uploaded_file).sheet_names
                             sheet_name = st.selectbox(
                                 f"Selecciona la hoja del archivo Excel para el dataset {idx}:",
                                 sheets,
@@ -255,73 +256,72 @@ def main():
                             )
                         except Exception as e:
                             st.error(f"Error al leer las hojas del archivo Excel: {e}")
-
                     reload_data = False
-                    if f'data{idx}_file_path' not in st.session_state or st.session_state[f'data{idx}_file_path'] != file_path:
+                    if (f'data{idx}_file_name' not in st.session_state or 
+                        st.session_state[f'data{idx}_file_name'] != uploaded_file.name):
                         reload_data = True
-                    if sheet_name and (f'data{idx}_sheet_name' not in st.session_state or st.session_state[f'data{idx}_sheet_name'] != sheet_name):
+                    if sheet_name and (f'data{idx}_sheet_name' not in st.session_state or 
+                                       st.session_state[f'data{idx}_sheet_name'] != sheet_name):
                         reload_data = True
                     if reload_data:
-                        st.session_state[f'data{idx}'] = load_data(file_path, sheet_name=sheet_name)
-                        st.session_state[f'data{idx}_file_path'] = file_path
+                        st.session_state[f'data{idx}'] = load_data(uploaded_file, sheet_name=sheet_name)
+                        st.session_state[f'data{idx}_file_name'] = uploaded_file.name
                         st.session_state[f'data{idx}_sheet_name'] = sheet_name
                     data = st.session_state.get(f'data{idx}')
 
                     if data is not None:
                         st.success("Archivo cargado exitosamente.")
                         st.dataframe(data.head(5), height=200)
-
                         selected_column = st.selectbox(
                             f"Selecciona la columna para comparar del dataset {idx}:",
                             data.columns,
                             key=f'col{idx}_selectbox'
                         )
-
                         additional_columns = st.multiselect(
                             f"Selecciona las columnas adicionales del dataset {idx} para incluir en el output:",
                             options=[col for col in data.columns if col != selected_column],
                             key=f'add_cols{idx}_multiselect'
                         )
             elif data_source == "Base de Datos SQLite":
-                db_file_path = st.text_input(
-                    f"Ruta de la base de datos SQLite para el dataset {idx}:",
-                    key=f'db{idx}_input'
+                uploaded_db_file = st.file_uploader(
+                    f"Sube la base de datos SQLite para el dataset {idx}:",
+                    type=["sqlite", "db", "sqlite3"],
+                    key=f'db{idx}_uploader'
                 )
-                if db_file_path and os.path.isfile(db_file_path):
+                if uploaded_db_file is not None:
                     query = st.text_area(
                         f"Consulta SQL para el dataset {idx} (opcional):",
                         "SELECT * FROM ConsolidatedData;",
                         key=f'query{idx}_input'
                     )
-
                     reload_data = False
-                    if f'data{idx}_db_path' not in st.session_state or st.session_state[f'data{idx}_db_path'] != db_file_path:
+                    if (f'data{idx}_db_file_name' not in st.session_state or 
+                        st.session_state[f'data{idx}_db_file_name'] != uploaded_db_file.name):
                         reload_data = True
-                    if f'data{idx}_query' not in st.session_state or st.session_state[f'data{idx}_query'] != query:
+                    if (f'data{idx}_query' not in st.session_state or 
+                        st.session_state[f'data{idx}_query'] != query):
                         reload_data = True
                     if reload_data:
-                        st.session_state[f'data{idx}'] = load_db_data(db_file_path, query)
-                        st.session_state[f'data{idx}_db_path'] = db_file_path
+                        st.session_state[f'data{idx}'] = load_db_data(uploaded_db_file, query)
+                        st.session_state[f'data{idx}_db_file_name'] = uploaded_db_file.name
                         st.session_state[f'data{idx}_query'] = query
                     data = st.session_state.get(f'data{idx}')
 
                     if data is not None:
                         st.success("Base de datos cargada exitosamente.")
                         st.dataframe(data.head(5), height=200)
-
                         selected_column = st.selectbox(
                             f"Selecciona la columna para comparar del dataset {idx}:",
                             data.columns,
                             key=f'col{idx}_db_selectbox'
                         )
-
                         additional_columns = st.multiselect(
                             f"Selecciona las columnas adicionales del dataset {idx} para incluir en el output:",
                             options=[col for col in data.columns if col != selected_column],
                             key=f'add_cols{idx}_db_multiselect'
                         )
-                elif db_file_path:
-                    st.warning("Por favor, ingresa una ruta válida para la base de datos.")
+                elif uploaded_db_file:
+                    st.warning("Por favor, sube un archivo válido para la base de datos.")
 
             # Opcional: Trimming
             if selected_column and data is not None:
@@ -369,7 +369,6 @@ def main():
             trim_options2 = data_sources[2]["trim_options"]
 
             with st.spinner("Comparando datos..."):
-                # Mostrar ajustes aplicados
                 adjustments = []
                 if trim_options1["enable"]:
                     adjustments.append(f"Dataset 1: Eliminar {trim_options1['trim_start']} caracteres al inicio y {trim_options1['trim_end']} al final.")
@@ -378,7 +377,6 @@ def main():
                 if adjustments:
                     st.info("Ajustes aplicados:\n" + "\n".join(adjustments))
 
-                # Normalizar las columnas seleccionadas
                 normalized_data1 = normalize_column(
                     data1, 
                     selected_column1, 
@@ -394,7 +392,6 @@ def main():
                     trim_end=trim_options2["trim_end"] if trim_options2["enable"] else 0
                 )
 
-                # Seleccionar y renombrar columnas adicionales
                 selected_cols1 = additional_columns1 if additional_columns1 else []
                 selected_cols2 = additional_columns2 if additional_columns2 else []
 
@@ -412,7 +409,6 @@ def main():
                 else:
                     merge_data2 = normalized_data2[['normalized_key']]
 
-                # Realizar la fusión para obtener coincidencias
                 matches = pd.merge(
                     merge_data2,
                     merge_data1,
@@ -420,50 +416,34 @@ def main():
                     how='inner'
                 )
 
-                # Identificar no coincidencias
                 non_matches = merge_data2[~merge_data2['normalized_key'].isin(merge_data1['normalized_key'])].copy()
 
-                # Agregar columnas adicionales del dataset 1 con valores NaN
                 for col_renamed in selected_cols1_renamed if selected_cols1 else []:
                     non_matches[col_renamed] = np.nan
 
-                # Ordenar las columnas
                 columns_order = ['normalized_key'] + (selected_cols2_renamed if selected_cols2 else []) + (selected_cols1_renamed if selected_cols1 else [])
                 non_matches = non_matches[columns_order]
 
-                # Obtener registros únicos
                 unique_matches = get_unique_records(matches, 'normalized_key')
                 unique_non_matches = get_unique_records(non_matches, 'normalized_key')
 
-                # **Depuración: Verificar unique_matches y unique_non_matches**
-                # st.write(f"Unique Matches Count: {len(unique_matches)}")
-                # st.write(unique_matches.head())
-
-                # st.write(f"Unique Non-Matches Count: {len(unique_non_matches)}")
-                # st.write(unique_non_matches.head())
-
-                # Eliminar acentos en las columnas de salida
                 for df_out in [unique_matches, unique_non_matches]:
                     for col in df_out.select_dtypes(include=['object']).columns:
                         df_out[col] = df_out[col].apply(remove_accents)
 
-                # Convertir a cadenas de texto para evitar notación científica
                 unique_matches = unique_matches.astype(str)
                 unique_non_matches = unique_non_matches.astype(str)
 
-                # Crear archivo Excel en memoria
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     unique_matches.to_excel(writer, sheet_name=f'Coincidencias_unicas_{len(unique_matches)}', index=False)
                     unique_non_matches.to_excel(writer, sheet_name=f'No_coincidencias_unicas_{len(unique_non_matches)}', index=False)
                 processed_data = output.getvalue()
 
-                # Almacenar resultados en session_state
                 st.session_state['unique_matches'] = unique_matches
                 st.session_state['unique_non_matches'] = unique_non_matches
                 st.session_state['processed_data'] = processed_data
 
-                # Guardar estadísticas
                 st.session_state['statistics'] = {
                     "total_records": len(data2),
                     "total_unique": len(get_unique_records(data2, selected_column2)),
@@ -473,25 +453,13 @@ def main():
                     "duplicate_non_matches": len(non_matches) - len(unique_non_matches)
                 }
 
-                # Calcular estadísticas de longitud final
                 final_length_stats1 = calculate_length_stats(unique_matches['normalized_key'])
                 final_length_stats2 = calculate_length_stats(unique_non_matches['normalized_key'])
                 st.session_state['final_length_stats1'] = final_length_stats1
                 st.session_state['final_length_stats2'] = final_length_stats2
 
-                # **Depuración: Mostrar información almacenada**
-                # st.write("### Depuración: Unique Matches almacenados")
-                # st.write(unique_matches.head())
-
-                # st.write("### Depuración: Unique Non-Matches almacenados")
-                # st.write(unique_non_matches.head())
-
-                # st.write("### Depuración: Estadísticas almacenadas")
-                # st.write(st.session_state['statistics'])
-
                 st.success("Comparación completada y resultados almacenados.")
 
-    # Mostrar resultados si están disponibles
     if all([
         'unique_matches' in st.session_state,
         'unique_non_matches' in st.session_state,
@@ -508,7 +476,6 @@ def main():
         st.markdown("---")
         st.header("📈 Resultados de la Comparación")
 
-        # Mostrar estadísticas principales
         st.subheader("🔢 Estadísticas de la Comparación")
         stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
         stats_col1.metric("Total de registros", statistics["total_records"])
@@ -516,10 +483,8 @@ def main():
         stats_col3.metric("Coincidencias únicas", statistics["unique_matches"])
         stats_col4.metric("No coincidencias únicas", statistics["unique_non_matches"])
 
-        # Sección de Coincidencias Únicas
         st.subheader("✅ Coincidencias Únicas")
         if not unique_matches.empty:
-            # Agregar búsqueda para coincidencias
             search_matches = st.text_input("🔍 Buscar en coincidencias", key="search_matches")
             filtered_matches = unique_matches
             if search_matches:
@@ -542,11 +507,8 @@ def main():
             st.warning("No se encontraron coincidencias.")
 
         st.markdown("---")
-
-        # Sección de No Coincidencias Únicas
         st.subheader("❌ No Coincidencias Únicas")
         if not unique_non_matches.empty:
-            # Agregar búsqueda para no coincidencias
             search_non_matches = st.text_input("🔍 Buscar en no coincidencias", key="search_non_matches")
             filtered_non_matches = unique_non_matches
             if search_non_matches:
@@ -568,7 +530,6 @@ def main():
         else:
             st.warning("No se encontraron registros sin coincidencias.")
         
-        # Sección de Descargas
         st.markdown("---")
         st.subheader("📥 Descargar Resultados")
         col1, col2 = st.columns(2)
@@ -606,7 +567,6 @@ def main():
                 mime="text/plain",
             )
 
-    # Mostrar ejemplos de registros recortados y normalizados antes de la comparación
     if not ('unique_matches' in st.session_state or 'unique_non_matches' in st.session_state):
         st.markdown("---")
         st.header("🔍 Ejemplos de Procesamiento de Datos")
@@ -648,7 +608,6 @@ def main():
                 st.write("**Registros recortados y normalizados:**")
                 st.write(sample_normalized2)
 
-    # Información de uso
     with st.expander("ℹ️ Información de uso"):
         st.markdown("""
         ### **Instrucciones de Uso**
@@ -656,36 +615,31 @@ def main():
         1. **Fuente de Datos 1 y 2**:
             - Selecciona el tipo de fuente de datos (Archivo Excel/CSV o Base de Datos SQLite).
             - **Si es un archivo**:
-                - Ingresa la ruta del archivo.
-                - Si es Excel, selecciona la hoja correspondiente.
+                - Sube el archivo correspondiente.
+                - Si es Excel, selecciona la hoja deseada.
                 - Selecciona la columna que deseas comparar.
                 - Opcional: Selecciona columnas adicionales para incluir en el resultado.
                 - Opcional: Ajusta la longitud de los registros eliminando caracteres al inicio o al final.
             - **Si es una base de datos SQLite**:
-                - Ingresa la ruta de la base de datos.
+                - Sube el archivo de la base de datos.
                 - Opcional: Ingresa una consulta SQL personalizada.
                 - Selecciona la columna que deseas comparar.
                 - Opcional: Selecciona columnas adicionales para incluir en el resultado.
                 - Opcional: Ajusta la longitud de los registros eliminando caracteres al inicio o al final.
 
         2. **Comparación**:
-            - Una vez seleccionadas ambas fuentes de datos y configuradas las opciones deseadas, haz clic en el botón **"Comparar Datos"**.
-            - La aplicación procesará los datos y mostrará las coincidencias y no coincidencias.
+            - Una vez configuradas ambas fuentes de datos, haz clic en **"Comparar Datos"**.
+            - La aplicación procesará y mostrará las coincidencias y no coincidencias.
 
         3. **Resultados**:
-            - Revisa las tablas de coincidencias y no coincidencias.
-            - Utiliza los filtros interactivos para explorar los datos.
-            - Consulta las estadísticas de longitud para asegurar que los ajustes se han aplicado correctamente.
+            - Revisa las tablas interactivas.
+            - Utiliza los filtros para explorar los datos.
+            - Consulta las estadísticas de longitud para validar los ajustes.
 
         4. **Descargas**:
             - Descarga el archivo Excel con los resultados completos.
             - Descarga un resumen de la comparación en formato de texto.
-
-        ### **Consejos**
-        - Asegúrate de que las rutas de los archivos y bases de datos sean correctas.
-        - Las columnas seleccionadas para la comparación deben contener datos relevantes y compatibles.
-        - Utiliza las opciones de trimming para mejorar la precisión de la comparación eliminando espacios o caracteres innecesarios.
         """)
-        
+
 if __name__ == "__main__":
     main()
