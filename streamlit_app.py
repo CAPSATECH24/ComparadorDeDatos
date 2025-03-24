@@ -542,15 +542,19 @@ def main():
         else:
             st.warning("No se encontraron registros sin coincidencias.")
         
-        # Sección de Descargas
+        # Sección de Descargas con nombre personalizado
         st.markdown("---")
         st.subheader("📥 Descargar Resultados")
         col1, col2 = st.columns(2)
+        current_date = pd.Timestamp.now().strftime('%Y-%m-%d')
+        excel_filename = f"BD - PLATAFORMAS y SIMS ({current_date}).xlsx"
+        summary_filename = f"BD - PLATAFORMAS y SIMS ({current_date}) - Resumen.txt"
+        
         with col1:
             st.download_button(
                 label="Descargar Excel con Resultados",
                 data=processed_data,
-                file_name="Resultados_comparacion.xlsx",
+                file_name=excel_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         with col2:
@@ -576,7 +580,7 @@ def main():
             st.download_button(
                 label="Descargar Resumen",
                 data=resumen_bytes,
-                file_name="Resumen_comparacion.txt",
+                file_name=summary_filename,
                 mime="text/plain",
             )
 
